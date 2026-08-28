@@ -16,6 +16,7 @@ test('STEP 3 migration은 새 raw 테이블과 적재 추적 컬럼을 선언한
 
 test('기간 설정은 사용 이력 실제 범위로 초기화한다', () => {
   const migration = readFileSync(migrationPath, 'utf8');
+  assert.match(migration, /to_regclass\('raw\.usage_history'\)/i);
   assert.match(migration, /min\(use_date\)/i);
   assert.match(migration, /max\(use_date\)/i);
   assert.doesNotMatch(migration, /'20\d\d-\d\d-\d\d'/);

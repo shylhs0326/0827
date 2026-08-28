@@ -147,35 +147,40 @@ create table if not exists core.forecast_setting (
   check (train_end < test_start)
 );
 
-with bounds as (
-  select min(use_date) as first_date, max(use_date) as last_date
-  from raw.usage_history
-  where use_date is not null
-), split as (
-  select
-    first_date,
-    last_date,
-    first_date + floor(((last_date - first_date + 1) * 0.8))::integer as test_start
-  from bounds
-  where last_date > first_date
-)
-insert into core.forecast_setting (
-  setting_key,
-  train_start,
-  train_end,
-  test_start,
-  test_end,
-  granularity
-)
-select
-  true,
-  first_date,
-  test_start - 1,
-  test_start,
-  last_date,
-  'DAILY'
-from split
-on conflict (setting_key) do nothing;
+do $$
+begin
+  if to_regclass('raw.usage_history') is not null then
+    insert into core.forecast_setting (
+      setting_key,
+      train_start,
+      train_end,
+      test_start,
+      test_end,
+      granularity
+    )
+    with bounds as (
+      select min(use_date) as first_date, max(use_date) as last_date
+      from raw.usage_history
+      where use_date is not null
+    ), split as (
+      select
+        first_date,
+        last_date,
+        first_date + floor(((last_date - first_date + 1) * 0.8))::integer as test_start
+      from bounds
+      where last_date > first_date
+    )
+    select
+      true,
+      first_date,
+      test_start - 1,
+      test_start,
+      last_date,
+      'DAILY'
+    from split
+    on conflict (setting_key) do nothing;
+  end if;
+end $$;
 
 drop trigger if exists policy_config_updated_at on core.policy_config;
 create trigger policy_config_updated_at

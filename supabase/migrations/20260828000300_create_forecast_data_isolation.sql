@@ -19,10 +19,12 @@ begin
     'forecast'
   ]
   loop
-    execute format('alter table raw.%I add column if not exists batch_id uuid', target_table);
-    execute format('alter table raw.%I add column if not exists source_type text', target_table);
-    execute format('alter table raw.%I add column if not exists loaded_at timestamptz', target_table);
-    execute format('alter table raw.%I add column if not exists source_record_id text', target_table);
+    if to_regclass(format('raw.%I', target_table)) is not null then
+      execute format('alter table raw.%I add column if not exists batch_id uuid', target_table);
+      execute format('alter table raw.%I add column if not exists source_type text', target_table);
+      execute format('alter table raw.%I add column if not exists loaded_at timestamptz', target_table);
+      execute format('alter table raw.%I add column if not exists source_record_id text', target_table);
+    end if;
   end loop;
 end $$;
 
@@ -80,6 +82,19 @@ create table if not exists raw.item_substitute (
 
 create index if not exists item_substitute_item_active_idx
   on raw.item_substitute (item_id, active, priority);
+
+alter table if exists raw.business_event add column if not exists batch_id uuid;
+alter table if exists raw.business_event add column if not exists source_type text;
+alter table if exists raw.business_event add column if not exists loaded_at timestamptz;
+alter table if exists raw.business_event add column if not exists source_record_id text;
+alter table if exists raw.sales_order add column if not exists batch_id uuid;
+alter table if exists raw.sales_order add column if not exists source_type text;
+alter table if exists raw.sales_order add column if not exists loaded_at timestamptz;
+alter table if exists raw.sales_order add column if not exists source_record_id text;
+alter table if exists raw.item_substitute add column if not exists batch_id uuid;
+alter table if exists raw.item_substitute add column if not exists source_type text;
+alter table if exists raw.item_substitute add column if not exists loaded_at timestamptz;
+alter table if exists raw.item_substitute add column if not exists source_record_id text;
 
 create table if not exists core.policy_config (
   setting_key boolean primary key default true check (setting_key),
@@ -181,4 +196,3 @@ drop trigger if exists forecast_setting_updated_at on core.forecast_setting;
 create trigger forecast_setting_updated_at
 before update on core.forecast_setting
 for each row execute function core.touch_updated_at();
-

@@ -63,9 +63,17 @@ export function validateImportRows({
   knownItemIds,
   knownSupplierIds,
 }: ValidateImportRowsInput): ImportValidationResult {
-  const issues: ValidationIssue[] = [
-    ...validateMapping(schema, mapping, rows),
-  ];
+  const issues = validateMapping(schema, mapping, rows);
+  if (issues.some((validationIssue) => validationIssue.severity === 'ERROR')) {
+    return {
+      issues,
+      successRows: 0,
+      warningRows: 0,
+      errorRows: rows.length,
+      canImport: false,
+    };
+  }
+
   const rowSeverities = new Map<number, Set<ValidationSeverity>>();
 
   for (const issue of issues) {
@@ -102,6 +110,14 @@ function validateMapping(
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const availableHeaders = new Set(rows.flatMap((row) => Object.keys(row.values)));
+  const schemaFields = new Set(schema.fields.map((field) => field.standardField));
+  const knownMappings = Object.entries(mapping).filter(([fieldName]) => schemaFields.has(fieldName));
+
+  for (const [fieldName, sourceHeader] of Object.entries(mapping)) {
+    if (!schemaFields.has(fieldName)) {
+      issues.push(issue(1, fieldName, 'UNKNOWN_STANDARD_FIELD_MAPPING', '이 Import 타입에 없는 표준 필드입니다.', 'ERROR', sourceHeader));
+    }
+  }
 
   for (const fieldName of schema.requiredFields) {
     if (!mapping[fieldName]) {
@@ -109,14 +125,14 @@ function validateMapping(
     }
   }
 
-  for (const [fieldName, sourceHeader] of Object.entries(mapping)) {
+  for (const [fieldName, sourceHeader] of knownMappings) {
     if (!availableHeaders.has(sourceHeader)) {
       issues.push(issue(1, fieldName, 'MAPPING_SOURCE_HEADER_NOT_FOUND', '매핑한 원본 컬럼을 파일에서 찾을 수 없습니다.', 'ERROR', sourceHeader));
     }
   }
 
-  const duplicateHeaders = new Set(findDuplicateSourceHeaders(mapping));
-  for (const [fieldName, sourceHeader] of Object.entries(mapping)) {
+  const duplicateHeaders = new Set(findDuplicateSourceHeaders(Object.fromEntries(knownMappings)));
+  for (const [fieldName, sourceHeader] of knownMappings) {
     if (duplicateHeaders.has(sourceHeader)) {
       issues.push(issue(1, fieldName, 'DUPLICATE_SOURCE_HEADER_MAPPING', '하나의 원본 컬럼은 하나의 표준 필드에만 매핑해야 합니다.', 'ERROR', sourceHeader));
     }

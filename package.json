@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test \"lib/**/*.test.ts\""
+    "test": "node --conditions=react-server --test \"lib/**/*.test.ts\""
   },
   "dependencies": {
     "@supabase/ssr": "^0.6.1",
@@ -19,6 +19,8 @@
     "papaparse": "^5.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "server-only": "^0.0.1",
+    "server-only": "^0.0.1",
     "typescript": "^5.0.0",
     "xlsx": "^0.18.5"
   }

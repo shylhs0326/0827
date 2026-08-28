@@ -48,6 +48,24 @@ test('필수 표준 필드가 매핑되지 않으면 적재를 차단한다', ()
     severity: 'ERROR',
     originalValue: null,
   }]);
+  assert.equal(result.successRows, 0);
+  assert.equal(result.errorRows, 1);
+});
+
+test('스키마에 없는 표준 필드 mapping은 명시적인 오류로 기록한다', () => {
+  const result = validateImportRows({
+    schema: getImportSchema('usage_history'),
+    mapping: { ...usageMapping, invented_field: '품목코드' },
+    rows: [{ rowNumber: 2, values: { 품목코드: 'ITEM001', 출고일: '2026-08-01', 출고수량: '1', 창고: 'A' } }],
+    knownItemIds: new Set(['ITEM001']),
+    knownSupplierIds: new Set(),
+  });
+
+  assert.deepEqual(result.issues.map((issue) => [issue.fieldName, issue.errorCode, issue.severity]), [
+    ['invented_field', 'UNKNOWN_STANDARD_FIELD_MAPPING', 'ERROR'],
+  ]);
+  assert.equal(result.successRows, 0);
+  assert.equal(result.errorRows, 1);
 });
 
 test('동일 source header를 여러 표준 필드에 매핑하면 검증 오류로 기록한다', () => {

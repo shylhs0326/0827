@@ -1,3 +1,4 @@
+import 'server-only';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import type { ImportType, ParsedImportRow } from './types.ts';
@@ -38,18 +39,24 @@ export async function parseImportFile(
   }
 
   const headers = readHeaders(matrix);
-  return matrix.slice(1).map((values, index) => ({
-    rowNumber: index + 2,
-    values: Object.fromEntries(headers.map((header, columnIndex) => [
-      header,
-      values[columnIndex] ?? null,
-    ])),
-  }));
+  return matrix.slice(1).flatMap((values, index) => {
+    if (isEmptyRow(values)) {
+      return [];
+    }
+
+    return [{
+      rowNumber: index + 2,
+      values: Object.fromEntries(headers.map((header, columnIndex) => [
+        header,
+        values[columnIndex] ?? null,
+      ])),
+    }];
+  });
 }
 
 async function parseCsv(file: ServerImportFile): Promise<string[][]> {
   const parsed = Papa.parse<string[]>(await file.text(), {
-    skipEmptyLines: 'greedy',
+    skipEmptyLines: false,
   });
 
   if (parsed.errors.length > 0) {
@@ -96,4 +103,8 @@ function readHeaders(matrix: string[][]): string[] {
   }
 
   return headers;
+}
+
+function isEmptyRow(values: readonly string[]): boolean {
+  return values.length === 0 || values.every((value) => value.trim().length === 0);
 }

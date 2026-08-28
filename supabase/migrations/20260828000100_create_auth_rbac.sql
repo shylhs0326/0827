@@ -48,6 +48,11 @@ $$;
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users for each row execute function core.handle_new_auth_user();
 
+insert into core.app_user (user_id, email, name)
+select id, coalesce(email, ''), coalesce(raw_user_meta_data ->> 'name', '')
+from auth.users
+on conflict (user_id) do nothing;
+
 create or replace function core.is_admin()
 returns boolean language sql stable security definer set search_path = core, public as $$
   select exists (select 1 from core.app_user where user_id = auth.uid() and role = 'ADMIN' and active = true);

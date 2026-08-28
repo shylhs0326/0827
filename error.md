@@ -151,3 +151,15 @@ where email = '관리자이메일@example.com';
 1. 로컬에서는 프로젝트 폴더에서 `npm run dev`를 실행한 뒤 `http://localhost:3000/login`으로 직접 접속한다.
 2. 배포 환경에서는 `NEXT_PUBLIC_SUPABASE_URL`과 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`를 배포 환경변수에 설정한 뒤 재배포한다.
 3. 계속 표시되지 않으면 주소창의 전체 URL과 브라우저 오류 화면을 확인한다.
+
+## 2026-08-28 인증 후 화면 전환 및 오류 원인 진단
+
+### 적용한 보완
+
+- 기존 `auth.users` 사용자를 `core.app_user`에 idempotent하게 backfill하는 migration을 추가했다.
+- middleware가 모든 앱 경로에서 최신 Supabase 세션 쿠키를 응답에 반영하도록 수정했다. `/login`과 `/api/health/supabase`는 공개로 유지한다.
+- 로그인 실패 화면에 Supabase 오류 코드를 함께 표시한다.
+
+### 수동 설정
+
+Supabase Dashboard → Project Settings → Data API → Exposed schemas에 `public`, `core`, `analytics`를 저장해야 한다. 이 설정은 SQL migration이나 Git push로 적용되지 않는다.

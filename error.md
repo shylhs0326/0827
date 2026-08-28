@@ -168,9 +168,10 @@ Supabase Dashboard → Project Settings → Data API → Exposed schemas에 `pub
 
 ### 적용 순서
 
-1. Supabase SQL Editor에서 `supabase/migrations/20260828000300_create_forecast_data_isolation.sql` 전체를 실행한다.
-2. Project Settings → Data API → Exposed schemas에 `raw`, `core`, `analytics`를 추가하고 저장한다. `raw`는 적재 API에서만 필요하며, 일반 화면은 `core`와 `analytics` view만 조회한다.
-3. 아래 쿼리로 자동 생성된 기간과 데이터 격리를 확인한다.
+1. `raw.usage_history`가 없는 프로젝트에서는 먼저 `supabase/migrations/20260828000050_create_raw_usage_history_base.sql` 전체를 실행한다. 이 파일은 테이블만 만들며 기존 데이터를 삭제하거나 예제 데이터를 적재하지 않는다.
+2. Supabase SQL Editor에서 `supabase/migrations/20260828000300_create_forecast_data_isolation.sql` 전체를 실행한다.
+3. Project Settings → Data API → Exposed schemas에 `raw`, `core`, `analytics`를 추가하고 저장한다. `raw`는 적재 API에서만 필요하며, 일반 화면은 `core`와 `analytics` view만 조회한다.
+4. 아래 쿼리로 자동 생성된 기간과 데이터 격리를 확인한다.
 
 ```sql
 select *
@@ -198,3 +199,7 @@ where setting_key = true;
 ```
 
 위 날짜는 예시다. 실제 사용 이력의 시작/종료 범위 안에서 설정해야 하며, 미래 actual을 학습 기간에 포함하면 안 된다.
+
+### 기존 public migration의 `planning_run_id` 오류
+
+`20260813000100_create_procurement_demand_core.sql`은 기존 public 테이블의 컬럼을 보완하지 않는다. 따라서 기존 `historical_actuals`에 `planning_run_id`가 없으면 인덱스 생성에서 실패할 수 있다. 이 오류는 STEP 3과 무관하므로 해당 base migration을 재실행하지 말고, 먼저 테이블 구조와 행 수를 확인한 뒤 데이터 보존 방식으로 별도 보완한다.

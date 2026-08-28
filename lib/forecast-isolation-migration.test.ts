@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const migrationPath = new URL('../supabase/migrations/20260828000300_create_forecast_data_isolation.sql', import.meta.url);
+const rawBootstrapMigrationPath = new URL('../supabase/migrations/20260828000050_create_raw_usage_history_base.sql', import.meta.url);
+
+test('raw 사용 이력 bootstrap은 기존 데이터를 삭제하지 않고 최소 입력 구조를 만든다', () => {
+  const migration = readFileSync(rawBootstrapMigrationPath, 'utf8');
+  assert.match(migration, /create schema if not exists raw/i);
+  assert.match(migration, /create table if not exists raw\.usage_history/i);
+  for (const column of ['usage_id', 'item_id', 'use_date', 'qty', 'warehouse', 'note']) {
+    assert.match(migration, new RegExp(`\\b${column}\\b`, 'i'));
+  }
+  assert.doesNotMatch(migration, /\bdrop\s+(table|schema)\b/i);
+  assert.doesNotMatch(migration, /\binsert\s+into\s+raw\.usage_history\b/i);
+});
 
 test('STEP 3 migration은 새 raw 테이블과 적재 추적 컬럼을 선언한다', () => {
   const migration = readFileSync(migrationPath, 'utf8');

@@ -178,4 +178,26 @@ export function suggestColumnMapping(type: ImportType, headers: readonly string[
   return mapping;
 }
 
+/**
+ * 검증 전 동일한 source header가 둘 이상의 표준 필드에 연결되었는지 확인한다.
+ * 공백과 대소문자만 다른 header는 같은 source header로 취급한다.
+ */
+export function findDuplicateSourceHeaders(mapping: ColumnMapping): string[] {
+  const sourceHeaders = new Map<string, string>();
+  const duplicates = new Set<string>();
+
+  for (const sourceHeader of Object.values(mapping)) {
+    const normalizedHeader = normalizeHeader(sourceHeader);
+    const firstHeader = sourceHeaders.get(normalizedHeader);
+
+    if (firstHeader) {
+      duplicates.add(firstHeader);
+    } else {
+      sourceHeaders.set(normalizedHeader, sourceHeader);
+    }
+  }
+
+  return [...duplicates];
+}
+
 export { importTypes };

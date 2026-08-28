@@ -11,6 +11,10 @@ export const importTypes = [
 
 export type ImportType = (typeof importTypes)[number];
 
+export function isImportType(value: string): value is ImportType {
+  return (importTypes as readonly string[]).includes(value);
+}
+
 export const importModes = ['append', 'upsert', 'replace'] as const;
 export type ImportMode = (typeof importModes)[number];
 
@@ -22,6 +26,7 @@ export type ParsedImportRow = {
   values: Record<string, string | null>;
 };
 
+/** 한 source header는 하나의 표준 필드에만 연결되어야 한다. */
 export type ColumnMapping = Record<string, string>;
 
 export type ImportFieldSchema = {

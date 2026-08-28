@@ -4,6 +4,16 @@ create schema if not exists raw;
 create schema if not exists core;
 create schema if not exists analytics;
 
+-- Step 3 extends the established raw model. A missing demand source must fail
+-- explicitly rather than create empty views that conceal an incomplete setup.
+do $$
+begin
+  if to_regclass('raw.usage_history') is null then
+    raise exception 'STEP 3 requires raw.usage_history. Apply the base raw schema before this migration.'
+      using errcode = '42P01';
+  end if;
+end $$;
+
 do $$
 declare
   target_table text;
@@ -95,6 +105,30 @@ alter table if exists raw.item_substitute add column if not exists batch_id uuid
 alter table if exists raw.item_substitute add column if not exists source_type text;
 alter table if exists raw.item_substitute add column if not exists loaded_at timestamptz;
 alter table if exists raw.item_substitute add column if not exists source_record_id text;
+
+-- A partially-created raw table must not be mistaken for a compatible model on
+-- a retry. Validate the required fields and fail with a precise migration error.
+do $$
+declare
+  target_table text;
+  required_column text;
+begin
+  foreach target_table in array array['business_event', 'sales_order', 'item_substitute']
+  loop
+    foreach required_column in array array['batch_id', 'source_type', 'loaded_at', 'source_record_id']
+    loop
+      if not exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'raw'
+          and table_name = target_table
+          and column_name = required_column
+      ) then
+        raise exception 'raw.% is missing required column %', target_table, required_column;
+      end if;
+    end loop;
+  end loop;
+end $$;
 
 create table if not exists core.policy_config (
   setting_key boolean primary key default true check (setting_key),
@@ -202,6 +236,16 @@ create trigger forecast_setting_updated_at
 before update on core.forecast_setting
 for each row execute function core.touch_updated_at();
 
+create or replace function core.is_active_user()
+returns boolean language sql stable security definer set search_path = core, public as $$
+  select exists (
+    select 1
+    from core.app_user
+    where user_id = auth.uid()
+      and active = true
+  );
+$$;
+
 -- Forecast and demand-profile readers must use this view instead of querying
 -- raw.usage_history directly. The configured boundary is the single source of
 -- truth, so test-period actuals cannot enter model training.
@@ -219,7 +263,8 @@ select
   usage.source_record_id
 from core.forecast_setting as setting
 join raw.usage_history as usage on true
-where usage.use_date between setting.train_start and setting.train_end;
+where usage.use_date between setting.train_start and setting.train_end
+  and core.is_active_user();
 
 -- Backtest scoring reads only the held-out actuals through this view.
 create or replace view core.v_test_actual as
@@ -236,7 +281,8 @@ select
   usage.source_record_id
 from core.forecast_setting as setting
 join raw.usage_history as usage on true
-where usage.use_date between setting.test_start and setting.test_end;
+where usage.use_date between setting.test_start and setting.test_end
+  and core.is_active_user();
 
 create or replace view analytics.v_data_coverage as
 with data_bounds as (
@@ -277,7 +323,8 @@ select
   coalesce(setting.train_end < setting.test_start, false) as data_isolation_ok
 from data_bounds as bounds
 left join core.forecast_setting as setting on true
-cross join row_counts as counts;
+cross join row_counts as counts
+where core.is_active_user();
 
 -- The admin settings screen can consume one stable, read-only relation.
 create or replace view analytics.v_forecast_settings as
@@ -301,6 +348,7 @@ revoke all on all tables in schema core from anon;
 revoke all on all tables in schema analytics from anon;
 
 grant usage on schema core, analytics to authenticated;
+grant execute on function core.is_active_user() to authenticated;
 grant select on core.policy_config, core.outlier_rule, core.item_policy, core.forecast_setting to authenticated;
 grant select on core.v_train_demand, core.v_test_actual to authenticated;
 grant select on analytics.v_data_coverage, analytics.v_forecast_settings to authenticated;
@@ -316,28 +364,28 @@ alter table core.forecast_setting enable row level security;
 
 drop policy if exists policy_config_authenticated_select on core.policy_config;
 create policy policy_config_authenticated_select on core.policy_config
-for select to authenticated using (auth.uid() is not null);
+for select to authenticated using (core.is_active_user());
 drop policy if exists policy_config_admin_mutation on core.policy_config;
 create policy policy_config_admin_mutation on core.policy_config
 for all to authenticated using (core.is_admin()) with check (core.is_admin());
 
 drop policy if exists outlier_rule_authenticated_select on core.outlier_rule;
 create policy outlier_rule_authenticated_select on core.outlier_rule
-for select to authenticated using (auth.uid() is not null);
+for select to authenticated using (core.is_active_user());
 drop policy if exists outlier_rule_admin_mutation on core.outlier_rule;
 create policy outlier_rule_admin_mutation on core.outlier_rule
 for all to authenticated using (core.is_admin()) with check (core.is_admin());
 
 drop policy if exists item_policy_authenticated_select on core.item_policy;
 create policy item_policy_authenticated_select on core.item_policy
-for select to authenticated using (auth.uid() is not null);
+for select to authenticated using (core.is_active_user());
 drop policy if exists item_policy_admin_mutation on core.item_policy;
 create policy item_policy_admin_mutation on core.item_policy
 for all to authenticated using (core.is_admin()) with check (core.is_admin());
 
 drop policy if exists forecast_setting_authenticated_select on core.forecast_setting;
 create policy forecast_setting_authenticated_select on core.forecast_setting
-for select to authenticated using (auth.uid() is not null);
+for select to authenticated using (core.is_active_user());
 drop policy if exists forecast_setting_admin_mutation on core.forecast_setting;
 create policy forecast_setting_admin_mutation on core.forecast_setting
 for all to authenticated using (core.is_admin()) with check (core.is_admin());

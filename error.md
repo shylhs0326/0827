@@ -163,3 +163,38 @@ where email = '관리자이메일@example.com';
 ### 수동 설정
 
 Supabase Dashboard → Project Settings → Data API → Exposed schemas에 `public`, `core`, `analytics`를 저장해야 한다. 이 설정은 SQL migration이나 Git push로 적용되지 않는다.
+
+## 2026-08-28 STEP 3 Forecast 학습/검증 데이터 격리 설정
+
+### 적용 순서
+
+1. Supabase SQL Editor에서 `supabase/migrations/20260828000300_create_forecast_data_isolation.sql` 전체를 실행한다.
+2. Project Settings → Data API → Exposed schemas에 `raw`, `core`, `analytics`를 추가하고 저장한다. `raw`는 적재 API에서만 필요하며, 일반 화면은 `core`와 `analytics` view만 조회한다.
+3. 아래 쿼리로 자동 생성된 기간과 데이터 격리를 확인한다.
+
+```sql
+select *
+from analytics.v_data_coverage;
+```
+
+### 정상 기준
+
+- `train_window_ok`, `test_window_ok`, `data_isolation_ok`가 모두 `true`여야 한다.
+- `train_end`는 반드시 `test_start`보다 이전이어야 한다.
+- 학습 또는 검증 데이터가 부족하면 migration은 임의 날짜나 0을 만들지 않고 `core.forecast_setting` 초기 행을 생성하지 않는다.
+
+### 데이터 부족 또는 기간 변경
+
+`core.forecast_setting`은 관리자만 수정할 수 있다. 사용 이력이 두 날짜 이상 있고 기간을 운영 기준으로 조정해야 할 때만 ADMIN 계정으로 다음처럼 변경한다.
+
+```sql
+update core.forecast_setting
+set train_start = date '2025-01-01',
+    train_end = date '2025-09-30',
+    test_start = date '2025-10-01',
+    test_end = date '2025-12-31',
+    granularity = 'DAILY'
+where setting_key = true;
+```
+
+위 날짜는 예시다. 실제 사용 이력의 시작/종료 범위 안에서 설정해야 하며, 미래 actual을 학습 기간에 포함하면 안 된다.

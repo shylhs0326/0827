@@ -45,3 +45,11 @@ test('정책 테이블 mutation은 ADMIN RLS 정책을 사용한다', () => {
   assert.match(migration, /using \(core\.is_admin\(\)\)/i);
   assert.match(migration, /revoke all on schema core from anon/i);
 });
+
+test('사용 이력 선행 조건과 활성 사용자 접근 조건을 명시한다', () => {
+  const migration = readFileSync(migrationPath, 'utf8');
+  assert.match(migration, /STEP 3 requires raw\.usage_history/i);
+  assert.match(migration, /create or replace function core\.is_active_user/i);
+  assert.match(migration, /using \(core\.is_active_user\(\)\)/i);
+  assert.match(migration, /where core\.is_active_user\(\)/i);
+});

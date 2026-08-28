@@ -1,4 +1,5 @@
 -- STEP 2 권한 기준. anon에는 업무 스키마를 노출하지 않습니다.
+create schema if not exists analytics;
 revoke all on schema core from anon;
 revoke all on schema analytics from anon;
 revoke all on all tables in schema core from anon;

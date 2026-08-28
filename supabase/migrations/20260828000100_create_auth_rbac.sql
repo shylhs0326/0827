@@ -1,4 +1,5 @@
 create schema if not exists core;
+create schema if not exists analytics;
 
 do $$ begin
   create type core.app_role as enum ('ADMIN', 'USER');

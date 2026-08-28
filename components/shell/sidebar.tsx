@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import { BarChart3, Boxes, Gauge, Settings2, Workflow } from 'lucide-react';
 import { menu, type MenuItem } from '@/lib/menu';
 
-const icons = { '/workflow': Gauge, '/analysis/leadtime': Workflow, '/analysis/stockout': Boxes, '/admin': Settings2, '/admin/master': Settings2 };
+const icons = { '/workflow': Gauge, '/analysis/leadtime': Workflow, '/analysis/stockout': Boxes, '/admin': Settings2, '/admin/users': Settings2, '/admin/master': Settings2 };
 
 export default function Sidebar({ items = menu.user }: { items?: MenuItem[] }) {
   const pathname = usePathname();

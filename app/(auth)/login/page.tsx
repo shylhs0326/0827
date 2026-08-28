@@ -1,3 +1,3 @@
-import Link from 'next/link';
+import LoginForm from '@/components/auth/login-form';
 
-export default function LoginPage() { return <main className="auth-page"><section className="card"><span className="eyebrow">SCM CONTROL CENTER</span><h1>로그인</h1><p className="muted">인증 기능은 다음 단계에서 연결됩니다.</p><Link className="button primary" href="/">발주계획으로 이동</Link></section></main>; }
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; error?: string }> }) { const params = await searchParams; const nextPath = params.next?.startsWith('/') ? params.next : '/'; return <main className="auth-page"><section className="card"><span className="eyebrow">SCM CONTROL CENTER</span><h1>로그인</h1><p className="muted">월간 발주계획 시스템에 로그인하세요.</p><LoginForm nextPath={nextPath} initialError={params.error} /></section></main>; }

@@ -1,0 +1,6 @@
+'use server';
+import { revalidatePath } from 'next/cache';
+import { requireAdmin } from '@/lib/auth';
+import { canChangeActive, canChangeRole, type AppRole } from '@/lib/auth-policy';
+export async function changeUserRole(formData: FormData) { const { supabase, user } = await requireAdmin(); const targetId = String(formData.get('targetId')); const nextRole = String(formData.get('role')) as AppRole; if (!['ADMIN', 'USER'].includes(nextRole) || !canChangeRole({ actorId: user.id, targetId, nextRole })) throw new Error('SELF_ROLE_CHANGE_FORBIDDEN'); const { error } = await supabase.schema('core').rpc('admin_update_user_role', { target_user_id: targetId, next_role: nextRole }); if (error) throw new Error(error.message); revalidatePath('/admin/users'); }
+export async function changeUserActive(formData: FormData) { const { supabase, user } = await requireAdmin(); const targetId = String(formData.get('targetId')); const nextActive = String(formData.get('active')) === 'true'; if (!canChangeActive({ actorId: user.id, targetId, nextActive })) throw new Error('SELF_DEACTIVATION_FORBIDDEN'); const { error } = await supabase.schema('core').rpc('admin_set_user_active', { target_user_id: targetId, next_active: nextActive }); if (error) throw new Error(error.message); revalidatePath('/admin/users'); }

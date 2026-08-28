@@ -8,6 +8,7 @@ export const userMenu: MenuItem[] = [
 
 export const adminMenu: MenuItem[] = [
   { href: '/admin', label: '관리자 홈', description: '시스템 관리' },
+  { href: '/admin/users', label: '사용자 관리', description: '계정·권한 관리' },
   { href: '/admin/master', label: '마스터 관리', description: '기준 데이터 관리' },
 ];
 

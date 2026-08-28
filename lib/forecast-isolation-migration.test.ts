@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const migrationPath = new URL('../supabase/migrations/20260828000300_create_forecast_data_isolation.sql', import.meta.url);
 const rawBootstrapMigrationPath = new URL('../supabase/migrations/20260828000050_create_raw_usage_history_base.sql', import.meta.url);
+const importPipelineMigrationPath = new URL('../supabase/migrations/20260828000400_create_import_pipeline.sql', import.meta.url);
 
 test('raw 사용 이력 bootstrap은 기존 데이터를 삭제하지 않고 최소 입력 구조를 만든다', () => {
   const migration = readFileSync(rawBootstrapMigrationPath, 'utf8');
@@ -64,4 +65,109 @@ test('사용 이력 선행 조건과 활성 사용자 접근 조건을 명시한
   assert.match(migration, /create or replace function core\.is_active_user/i);
   assert.match(migration, /using \(core\.is_active_user\(\)\)/i);
   assert.match(migration, /where core\.is_active_user\(\)/i);
+});
+
+test('STEP 4 migration은 batch, staging, mapping, 오류, rollback, forecast 변경 이력을 추가한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  for (const table of [
+    'upload_batch',
+    'import_staging',
+    'column_mapping',
+    'validation_error',
+    'import_rollback_snapshot',
+    'forecast_data_change',
+  ]) {
+    assert.match(migration, new RegExp(`create table if not exists core\\.${table}`, 'i'));
+  }
+
+  assert.match(migration, /create or replace view core\.import_batch_summary/i);
+  assert.match(migration, /'PARSED'.*'VALIDATED'.*'IMPORTED'.*'ROLLED_BACK'.*'FAILED'/is);
+  assert.match(migration, /'SUCCESS'.*'WARNING'.*'ERROR'/is);
+});
+
+test('Import migration은 기존 RAW schema를 변경하지 않고 provenance 선행 조건을 검증한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  for (const table of [
+    'usage_history',
+    'inventory',
+    'item_master',
+    'supplier_master',
+    'purchase_order',
+    'goods_receipt',
+    'sales_order',
+    'business_event',
+  ]) {
+    assert.match(migration, new RegExp(`'${table}'`, 'i'));
+  }
+
+  for (const column of ['batch_id', 'source_type', 'loaded_at', 'source_record_id']) {
+    assert.match(migration, new RegExp(`'${column}'`, 'i'));
+  }
+
+  assert.doesNotMatch(migration, /\b(?:create|alter|drop)\s+table\s+(?:if\s+(?:not\s+)?exists\s+)?raw\./i);
+});
+
+test('Import 승인 RPC는 ADMIN과 검증 완료 batch만 허용하고 provenance를 채운다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.match(migration, /create or replace function core\.import_approved_batch\s*\(/i);
+  assert.match(migration, /if not core\.is_admin\(\) then\s+raise exception 'ADMIN_REQUIRED'/i);
+  assert.match(migration, /status\s*<>\s*'VALIDATED'/i);
+  assert.match(migration, /error_rows\s*<>\s*0/i);
+  assert.match(migration, /source_type[\s\S]*'FILE_UPLOAD'/i);
+  assert.match(migration, /source_record_id/i);
+  assert.match(migration, /batch_id/i);
+  assert.match(migration, /loaded_at/i);
+});
+
+test('upsert는 기존 FILE_UPLOAD 행을 snapshot하고 append/upsert rollback은 batch 범위만 제거한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.match(migration, /import_mode\s*=\s*'upsert'/i);
+  assert.match(migration, /insert into core\.import_rollback_snapshot/i);
+  assert.match(migration, /source_type\s*=\s*'FILE_UPLOAD'/i);
+  assert.match(migration, /create or replace function core\.rollback_import_batch\s*\(/i);
+  assert.match(migration, /where batch_id\s*=\s*\$1/i);
+  assert.match(migration, /jsonb_populate_record/i);
+});
+
+test('replace는 명시 확인을 요구하고 rollback을 거부한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.match(migration, /replace_confirmation\s+is distinct from\s+'REPLACE'/i);
+  assert.match(migration, /raise exception 'REPLACE_CONFIRMATION_REQUIRED'/i);
+  assert.match(migration, /raise exception 'REPLACE_ROLLBACK_NOT_SUPPORTED'/i);
+  assert.match(migration, /rollback_supported[\s\S]*import_mode\s*<>\s*'replace'/i);
+});
+
+test('Import 관리 객체는 RLS와 ADMIN mutation 정책 및 안전한 RPC 권한을 사용한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  for (const table of [
+    'upload_batch',
+    'import_staging',
+    'column_mapping',
+    'validation_error',
+    'import_rollback_snapshot',
+    'forecast_data_change',
+  ]) {
+    assert.match(migration, new RegExp(`alter table core\\.${table} enable row level security`, 'i'));
+  }
+
+  assert.match(migration, /uploaded_by\s*=\s*auth\.uid\(\)\s+or\s+core\.is_admin\(\)/i);
+  assert.match(migration, /using \(core\.is_admin\(\)\) with check \(core\.is_admin\(\)\)/i);
+  assert.match(migration, /revoke all on function core\.import_approved_batch[^;]+from public, anon/i);
+  assert.match(migration, /revoke all on function core\.rollback_import_batch[^;]+from public, anon/i);
+  assert.match(migration, /grant execute on function core\.import_approved_batch[^;]+to authenticated/i);
+  assert.match(migration, /grant execute on function core\.rollback_import_batch[^;]+to authenticated/i);
+});
+
+test('수요 영향 Import만 Forecast stale 변경 이력을 남긴다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.match(migration, /import_type\s+in\s*\(\s*'usage_history',\s*'sales_order',\s*'business_event'\s*\)/i);
+  assert.match(migration, /insert into core\.forecast_data_change/i);
+  assert.match(migration, /rolled_back_at/i);
 });

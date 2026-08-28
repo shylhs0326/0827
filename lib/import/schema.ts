@@ -197,7 +197,7 @@ export function findDuplicateSourceHeaders(mapping: ColumnMapping): string[] {
     }
   }
 
-  return [...duplicates];
+  return Array.from(duplicates);
 }
 
 export { importTypes };

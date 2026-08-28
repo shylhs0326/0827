@@ -29,3 +29,19 @@ test('raw 테이블이 부분적으로 존재해도 적재 추적 컬럼을 안�
     assert.match(migration, new RegExp(`alter table if exists raw\\.${table} add column if not exists batch_id`, 'i'));
   }
 });
+
+test('train/test view와 coverage view가 DB 설정 경계를 사용한다', () => {
+  const migration = readFileSync(migrationPath, 'utf8');
+  for (const view of ['core.v_train_demand', 'core.v_test_actual', 'analytics.v_data_coverage']) {
+    assert.match(migration, new RegExp(`create or replace view ${view.replace('.', '\\.')}`, 'i'));
+  }
+  assert.match(migration, /from core\.forecast_setting/i);
+  assert.match(migration, /train_end < test_start/i);
+});
+
+test('정책 테이블 mutation은 ADMIN RLS 정책을 사용한다', () => {
+  const migration = readFileSync(migrationPath, 'utf8');
+  assert.match(migration, /create policy policy_config_admin_mutation/i);
+  assert.match(migration, /using \(core\.is_admin\(\)\)/i);
+  assert.match(migration, /revoke all on schema core from anon/i);
+});

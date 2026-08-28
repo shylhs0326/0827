@@ -201,3 +201,143 @@ drop trigger if exists forecast_setting_updated_at on core.forecast_setting;
 create trigger forecast_setting_updated_at
 before update on core.forecast_setting
 for each row execute function core.touch_updated_at();
+
+-- Forecast and demand-profile readers must use this view instead of querying
+-- raw.usage_history directly. The configured boundary is the single source of
+-- truth, so test-period actuals cannot enter model training.
+create or replace view core.v_train_demand as
+select
+  usage.usage_id,
+  usage.item_id,
+  usage.use_date,
+  usage.qty,
+  usage.warehouse,
+  usage.note,
+  usage.batch_id,
+  usage.source_type,
+  usage.loaded_at,
+  usage.source_record_id
+from core.forecast_setting as setting
+join raw.usage_history as usage on true
+where usage.use_date between setting.train_start and setting.train_end;
+
+-- Backtest scoring reads only the held-out actuals through this view.
+create or replace view core.v_test_actual as
+select
+  usage.usage_id,
+  usage.item_id,
+  usage.use_date,
+  usage.qty,
+  usage.warehouse,
+  usage.note,
+  usage.batch_id,
+  usage.source_type,
+  usage.loaded_at,
+  usage.source_record_id
+from core.forecast_setting as setting
+join raw.usage_history as usage on true
+where usage.use_date between setting.test_start and setting.test_end;
+
+create or replace view analytics.v_data_coverage as
+with data_bounds as (
+  select
+    min(use_date) as data_start,
+    max(use_date) as data_end
+  from raw.usage_history
+  where use_date is not null
+), row_counts as (
+  select
+    (select count(*) from core.v_train_demand) as train_row_count,
+    (select count(*) from core.v_test_actual) as test_row_count
+)
+select
+  bounds.data_start,
+  bounds.data_end,
+  setting.train_start,
+  setting.train_end,
+  setting.test_start,
+  setting.test_end,
+  setting.granularity,
+  counts.train_row_count,
+  counts.test_row_count,
+  coalesce(
+    setting.train_start >= bounds.data_start
+    and setting.train_end <= bounds.data_end
+    and setting.train_start <= setting.train_end
+    and counts.train_row_count > 0,
+    false
+  ) as train_window_ok,
+  coalesce(
+    setting.test_start >= bounds.data_start
+    and setting.test_end <= bounds.data_end
+    and setting.test_start <= setting.test_end
+    and counts.test_row_count > 0,
+    false
+  ) as test_window_ok,
+  coalesce(setting.train_end < setting.test_start, false) as data_isolation_ok
+from data_bounds as bounds
+left join core.forecast_setting as setting on true
+cross join row_counts as counts;
+
+-- The admin settings screen can consume one stable, read-only relation.
+create or replace view analytics.v_forecast_settings as
+select
+  coverage.*,
+  policy.default_service_level,
+  policy.review_period_days,
+  policy.safety_buffer_days,
+  policy.settings as policy_settings
+from analytics.v_data_coverage as coverage
+left join core.policy_config as policy on policy.setting_key;
+
+-- Raw ingestion tables have no direct authenticated access. Their data is
+-- exposed only by approved views, while admin-managed configuration tables use
+-- the reusable core.is_admin() predicate for every mutation.
+revoke all on schema raw from anon, authenticated;
+revoke all on schema core from anon;
+revoke all on schema analytics from anon;
+revoke all on all tables in schema raw from anon, authenticated;
+revoke all on all tables in schema core from anon;
+revoke all on all tables in schema analytics from anon;
+
+grant usage on schema core, analytics to authenticated;
+grant select on core.policy_config, core.outlier_rule, core.item_policy, core.forecast_setting to authenticated;
+grant select on core.v_train_demand, core.v_test_actual to authenticated;
+grant select on analytics.v_data_coverage, analytics.v_forecast_settings to authenticated;
+grant insert, update, delete on core.policy_config, core.outlier_rule, core.item_policy, core.forecast_setting to authenticated;
+
+alter table raw.business_event enable row level security;
+alter table raw.sales_order enable row level security;
+alter table raw.item_substitute enable row level security;
+alter table core.policy_config enable row level security;
+alter table core.outlier_rule enable row level security;
+alter table core.item_policy enable row level security;
+alter table core.forecast_setting enable row level security;
+
+drop policy if exists policy_config_authenticated_select on core.policy_config;
+create policy policy_config_authenticated_select on core.policy_config
+for select to authenticated using (auth.uid() is not null);
+drop policy if exists policy_config_admin_mutation on core.policy_config;
+create policy policy_config_admin_mutation on core.policy_config
+for all to authenticated using (core.is_admin()) with check (core.is_admin());
+
+drop policy if exists outlier_rule_authenticated_select on core.outlier_rule;
+create policy outlier_rule_authenticated_select on core.outlier_rule
+for select to authenticated using (auth.uid() is not null);
+drop policy if exists outlier_rule_admin_mutation on core.outlier_rule;
+create policy outlier_rule_admin_mutation on core.outlier_rule
+for all to authenticated using (core.is_admin()) with check (core.is_admin());
+
+drop policy if exists item_policy_authenticated_select on core.item_policy;
+create policy item_policy_authenticated_select on core.item_policy
+for select to authenticated using (auth.uid() is not null);
+drop policy if exists item_policy_admin_mutation on core.item_policy;
+create policy item_policy_admin_mutation on core.item_policy
+for all to authenticated using (core.is_admin()) with check (core.is_admin());
+
+drop policy if exists forecast_setting_authenticated_select on core.forecast_setting;
+create policy forecast_setting_authenticated_select on core.forecast_setting
+for select to authenticated using (auth.uid() is not null);
+drop policy if exists forecast_setting_admin_mutation on core.forecast_setting;
+create policy forecast_setting_admin_mutation on core.forecast_setting
+for all to authenticated using (core.is_admin()) with check (core.is_admin());

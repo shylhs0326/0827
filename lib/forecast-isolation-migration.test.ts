@@ -25,6 +25,6 @@ test('raw 테이블이 부분적으로 존재해도 적재 추적 컬럼을 안�
   const migration = readFileSync(migrationPath, 'utf8');
   assert.match(migration, /to_regclass\(format\('raw\.%I', target_table\)\)/i);
   for (const table of ['business_event', 'sales_order', 'item_substitute']) {
-    assert.match(migration, new RegExp(`alter table raw\\.${table} add column if not exists batch_id`, 'i'));
+    assert.match(migration, new RegExp(`alter table if exists raw\\.${table} add column if not exists batch_id`, 'i'));
   }
 });

@@ -28,7 +28,15 @@ export type ImportBatchSummary = {
   error_rows: number;
   status: BatchStatus;
   rollback_supported: boolean;
+  uploaded_by_email: string | null;
+  uploaded_by_name: string | null;
   uploaded_at: string;
+};
+
+export type ImportPreview = {
+  totalRows: number;
+  headers: string[];
+  rows: ParsedImportRow[];
 };
 
 type StagingRow = {
@@ -68,7 +76,16 @@ export function buildErrorCsv(rows: readonly ErrorCsvRow[]): string {
   return `\uFEFF${[headers, ...values].map((row) => row.map(escapeCsvValue).join(',')).join('\r\n')}`;
 }
 
-export async function stageImport(formData: FormData): Promise<{ batchId: string; mapping: ColumnMapping; totalRows: number }> {
+/** 브라우저 전송량을 제한하기 위해 preview는 원본 헤더와 첫 20행만 반환한다. */
+export function buildPreviewSample(rows: readonly ParsedImportRow[], limit = 20): ImportPreview {
+  return {
+    totalRows: rows.length,
+    headers: Array.from(new Set(rows.flatMap((row) => Object.keys(row.values)))),
+    rows: rows.slice(0, limit),
+  };
+}
+
+export async function stageImport(formData: FormData): Promise<{ batchId: string; mapping: ColumnMapping; totalRows: number; preview: ImportPreview }> {
   const { supabase, user } = await requireImportAdmin();
   const file = formData.get('file');
   if (!(file instanceof File)) {
@@ -100,7 +117,7 @@ export async function stageImport(formData: FormData): Promise<{ batchId: string
     throw error;
   }
 
-  return { batchId: batch.batch_id as string, mapping, totalRows: rows.length };
+  return { batchId: batch.batch_id as string, mapping, totalRows: rows.length, preview: buildPreviewSample(rows) };
 }
 
 export async function validateBatch(batchId: string, mappingValue?: unknown): Promise<ImportBatchSummary> {
@@ -224,7 +241,16 @@ export async function getErrorCsv(batchId: string): Promise<string> {
   return buildErrorCsv(await getValidationErrors(batchId));
 }
 
-const importBatchColumns = 'batch_id,file_name,import_type,import_mode,total_rows,success_rows,warning_rows,error_rows,status,rollback_supported,uploaded_at';
+export async function getImportHistoryForAdmin(): Promise<ImportBatchSummary[]> {
+  const { supabase } = await requireImportAdmin();
+  const { data, error } = await supabase.schema('core').from('import_batch_summary')
+    .select(importBatchColumns)
+    .order('uploaded_at', { ascending: false });
+  throwOnSupabaseError(error);
+  return (data ?? []) as ImportBatchSummary[];
+}
+
+const importBatchColumns = 'batch_id,file_name,import_type,import_mode,total_rows,success_rows,warning_rows,error_rows,status,rollback_supported,uploaded_by_email,uploaded_by_name,uploaded_at';
 
 async function requireImportAdmin() {
   const { requireAdmin } = await import('../auth.ts');

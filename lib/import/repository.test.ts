@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildPreviewSample,
   buildErrorCsv,
   buildSourceRecordId,
   canApproveImport,
   canRollbackImport,
 } from './repository.ts';
+
+test('미리보기는 원본 헤더와 첫 행만 안전한 개수로 반환한다', () => {
+  const preview = buildPreviewSample([
+    { rowNumber: 2, values: { 품목코드: 'A', 출고수량: '1' } },
+    { rowNumber: 3, values: { 품목코드: 'B', 출고수량: '2', 비고: 'x' } },
+    { rowNumber: 4, values: { 품목코드: 'C', 출고수량: '3' } },
+  ], 2);
+
+  assert.deepEqual(preview.headers, ['품목코드', '출고수량', '비고']);
+  assert.equal(preview.rows.length, 2);
+  assert.equal(preview.rows[0]?.rowNumber, 2);
+});
 
 test('검증 완료되고 오류가 없는 batch만 승인할 수 있다', () => {
   assert.equal(canApproveImport({ status: 'VALIDATED', errorRows: 0 }), true);

@@ -12,6 +12,7 @@ export default function ImportHistory({ batches }: { batches: ImportBatchSummary
       { key: 'import_type', label: '유형' },
       { key: 'import_mode', label: '모드' },
       { key: 'rows', label: '결과', render: (batch) => <>전체 {Number(batch.total_rows)} · 성공 {Number(batch.success_rows)}<br />경고 {Number(batch.warning_rows)} · 오류 {Number(batch.error_rows)}</> },
+      { key: 'uploaded_by', label: '업로드 사용자', render: (batch) => <>{String(batch.uploaded_by_name ?? '—')}<br /><span className="muted">{String(batch.uploaded_by_email ?? 'USER_UNAVAILABLE')}</span></> },
       { key: 'status', label: '상태', render: (batch) => <Badge tone={statusTone(String(batch.status))}>{String(batch.status)}</Badge> },
       { key: 'uploaded_at', label: '시간', render: (batch) => formatDate(String(batch.uploaded_at)) },
       { key: 'actions', label: '관리', render: (batch) => <BatchActions batch={batch as ImportBatchSummary} /> },
@@ -23,6 +24,7 @@ function BatchActions({ batch }: { batch: ImportBatchSummary }) {
   const canRollback = canRollbackImport({ mode: batch.import_mode, status: batch.status, rollbackSupported: batch.rollback_supported });
   return <div className="admin-actions">
     {(batch.error_rows > 0 || batch.warning_rows > 0) && <a className="button ghost" href={`/api/admin/import/error-csv?batchId=${encodeURIComponent(batch.batch_id)}`}>오류 CSV</a>}
+    {(batch.error_rows > 0 || batch.warning_rows > 0) && <a className="button ghost" href={`/admin/data-management?batchId=${encodeURIComponent(batch.batch_id)}#validation-errors`}>오류 보기</a>}
     {canRollback && <form action={rollbackAction}><input type="hidden" name="batchId" value={batch.batch_id} /><Button type="submit">Batch rollback</Button></form>}
     {batch.import_mode === 'replace' && !batch.rollback_supported && <span className="muted">replace rollback 불가</span>}
   </div>;

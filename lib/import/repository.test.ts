@@ -41,4 +41,16 @@ test('오류 CSV에는 원본 데이터와 오류 메타데이터를 포함한�
   assert.match(csv, /row_number/);
   assert.match(csv, /UNKNOWN_ITEM/);
   assert.match(csv, /UNKNOWN,,2/);
+  assert.ok(csv.startsWith('\uFEFF'));
+});
+
+test('오류 CSV는 Excel 수식으로 해석될 수 있는 값을 텍스트로 만든다', () => {
+  const csv = buildErrorCsv([{
+    rowNumber: 2, originalData: { 품목코드: '=HYPERLINK("https://example.test")' },
+    errorCode: '+FORMULA', errorMessage: '@수식 방지', severity: 'ERROR',
+  }]);
+
+  assert.match(csv, /'=HYPERLINK/);
+  assert.match(csv, /'\+FORMULA/);
+  assert.match(csv, /'@수식 방지/);
 });

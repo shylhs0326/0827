@@ -82,8 +82,8 @@ test('STEP 4 migration은 batch, staging, mapping, 오류, rollback, forecast �
   }
 
   assert.match(migration, /create or replace view core\.import_batch_summary/i);
-  assert.match(migration, /'PARSED'.*'VALIDATED'.*'IMPORTED'.*'ROLLED_BACK'.*'FAILED'/is);
-  assert.match(migration, /'SUCCESS'.*'WARNING'.*'ERROR'/is);
+  assert.match(migration, /'PARSED'[\s\S]*'VALIDATED'[\s\S]*'IMPORTED'[\s\S]*'ROLLED_BACK'[\s\S]*'FAILED'/i);
+  assert.match(migration, /'SUCCESS'[\s\S]*'WARNING'[\s\S]*'ERROR'/i);
 });
 
 test('Import migration은 기존 RAW schema를 변경하지 않고 provenance 선행 조건을 검증한다', () => {
@@ -161,6 +161,17 @@ test('Import core table re-run은 essential columns를 ALTER ADD COLUMN IF NOT E
   assert.match(migration, /alter table core\.upload_batch add column if not exists failure_code text/i);
   assert.match(migration, /alter table core\.import_staging add column if not exists source_record_id text/i);
   assert.match(migration, /create unique index if not exists import_staging_batch_source_record_id_unique/i);
+  assert.match(migration, /alter table core\.import_staging alter column source_record_id drop not null/i);
+  assert.match(migration, /where source_record_id is not null and btrim\(source_record_id\) <> ''/i);
+});
+
+test('Import 검증 참조 RPC는 RAW 권한을 열지 않고 명시 인자를 사용한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+  assert.match(migration, /function core\.get_import_reference_data\(p_import_type text\)/i);
+  assert.match(migration, /function core\.import_approved_batch\(p_batch_id uuid, p_replace_confirmation text default null\)/i);
+  assert.match(migration, /function core\.rollback_import_batch\(p_batch_id uuid\)/i);
+  assert.match(migration, /set search_path = pg_catalog, core, raw, pg_temp/i);
+  assert.match(migration, /IMPORT_TARGET_UNAVAILABLE/i);
 });
 
 test('replace는 명시 확인을 요구하고 rollback을 거부한다', () => {

@@ -65,7 +65,7 @@ export function buildErrorCsv(rows: readonly ErrorCsvRow[]): string {
     row.errorMessage,
     row.severity,
   ]);
-  return [headers, ...values].map((row) => row.map(escapeCsvValue).join(',')).join('\r\n');
+  return `\uFEFF${[headers, ...values].map((row) => row.map(escapeCsvValue).join(',')).join('\r\n')}`;
 }
 
 export async function stageImport(formData: FormData): Promise<{ batchId: string; mapping: ColumnMapping; totalRows: number }> {
@@ -78,8 +78,8 @@ export async function stageImport(formData: FormData): Promise<{ batchId: string
   const importType = readImportType(formData.get('importType'));
   const importMode = readImportMode(formData.get('importMode'));
   const rows = await parseImportFile(file, importType);
-  const mapping = readMapping(formData.get('mapping'), importType, rows);
-  const schema = getImportSchema(importType);
+  // 자동 매핑은 Preview 제안값일 뿐, 사용자가 검증 단계에서 확정하기 전에는 저장하지 않는다.
+  const mapping = suggestColumnMapping(importType, Array.from(new Set(rows.flatMap((row) => Object.keys(row.values)))));
 
   const { data: batch, error: batchError } = await supabase.schema('core').from('upload_batch').insert({
     file_name: file.name,
@@ -92,29 +92,19 @@ export async function stageImport(formData: FormData): Promise<{ batchId: string
   throwOnSupabaseError(batchError);
   if (!batch) throw new Error('IMPORT_BATCH_CREATE_FAILED');
 
-  const stagingRows = rows.map((row) => buildStagingRow(batch.batch_id, schema, mapping, row));
-  const { error: stagingError } = await supabase.schema('core').from('import_staging').insert(stagingRows);
-  throwOnSupabaseError(stagingError);
-
-  const mappingRows = Object.entries(mapping).map(([standardField, sourceHeader]) => ({
-    import_type: importType,
-    source_header: sourceHeader,
-    standard_field: standardField,
-    raw_column: schema.fields.find((field) => field.standardField === standardField)?.rawColumn ?? standardField,
-    created_by: user.id,
-    updated_at: new Date().toISOString(),
-  }));
-  if (mappingRows.length > 0) {
-    const { error: mappingError } = await supabase.schema('core').from('column_mapping')
-      .upsert(mappingRows, { onConflict: 'import_type,source_header' });
-    throwOnSupabaseError(mappingError);
+  try {
+    const stagingRows = rows.map((row) => buildPreviewStagingRow(batch.batch_id, row));
+    await insertInChunks(supabase.schema('core').from('import_staging'), stagingRows);
+  } catch (error) {
+    await markBatchFailed(supabase, batch.batch_id as string, error);
+    throw error;
   }
 
   return { batchId: batch.batch_id as string, mapping, totalRows: rows.length };
 }
 
 export async function validateBatch(batchId: string, mappingValue?: unknown): Promise<ImportBatchSummary> {
-  const { supabase } = await requireImportAdmin();
+  const { supabase, user } = await requireImportAdmin();
   const batch = await getBatchForMutation(supabase, batchId);
   if (batch.status !== 'PARSED') {
     throw new Error('IMPORT_BATCH_NOT_PARSE_READY');
@@ -123,16 +113,17 @@ export async function validateBatch(batchId: string, mappingValue?: unknown): Pr
   const schema = getImportSchema(batch.import_type);
   const staging = await getStagingRows(supabase, batchId);
   const rows = staging.map(toParsedRow);
-  const mapping = readMapping(mappingValue, batch.import_type, rows);
-  const { knownItemIds, knownSupplierIds } = await loadKnownMasterIds(supabase, schema);
-  const validation = validateImportRows({ schema, mapping, rows, knownItemIds, knownSupplierIds });
+  const mapping = readConfirmedMapping(mappingValue);
+  const references = await loadImportReferences(supabase, schema);
+  const validation = validateImportRows({ schema, mapping, rows, knownItemIds: references.knownItemIds, knownSupplierIds: references.knownSupplierIds });
   const naturalKeyIssues = findNaturalKeyIssues(schema, mapping, rows);
-  const issues = [...validation.issues, ...naturalKeyIssues];
+  const issues = [...validation.issues, ...naturalKeyIssues, ...(references.reasonCode ? unavailableTargetIssues(rows, references.reasonCode) : [])];
   const rowStatuses = buildRowStatuses(rows, issues);
   const counts = countRowStatuses(rowStatuses);
 
-  const { error: clearError } = await supabase.schema('core').from('validation_error').delete().eq('batch_id', batchId);
-  throwOnSupabaseError(clearError);
+  try {
+    const { error: clearError } = await supabase.schema('core').from('validation_error').delete().eq('batch_id', batchId);
+    throwOnSupabaseError(clearError);
 
   const errors = issues.filter((issue) => issue.severity !== 'SUCCESS').map((issue) => ({
     batch_id: batchId,
@@ -143,32 +134,41 @@ export async function validateBatch(batchId: string, mappingValue?: unknown): Pr
     severity: issue.severity,
     original_value: issue.originalValue,
   }));
-  if (errors.length > 0) {
-    const { error } = await supabase.schema('core').from('validation_error').insert(errors);
-    throwOnSupabaseError(error);
-  }
+    if (errors.length > 0) await insertInChunks(supabase.schema('core').from('validation_error'), errors);
 
-  for (const row of rows) {
-    const normalizedData = normalizeRow(schema, mapping, row);
-    const sourceRecordId = buildSourceRecordId(schema.type, schema.naturalKey.map((field) => mappedValue(row, mapping, field)));
-    const { error } = await supabase.schema('core').from('import_staging').update({
+    for (const rowGroup of chunks(rows, 500)) {
+      await Promise.all(rowGroup.map(async (row) => {
+        const normalizedData = normalizeRow(schema, mapping, row);
+        const sourceRecordId = buildSourceRecordId(schema.type, schema.naturalKey.map((field) => mappedValue(row, mapping, field)));
+        const { error } = await supabase.schema('core').from('import_staging').update({
       normalized_data: normalizedData,
       source_record_id: sourceRecordId,
       mapping_confirmed: true,
       validation_status: rowStatuses.get(row.rowNumber),
       validated_at: new Date().toISOString(),
-    }).eq('batch_id', batchId).eq('row_number', row.rowNumber);
-    throwOnSupabaseError(error);
-  }
+        }).eq('batch_id', batchId).eq('row_number', row.rowNumber);
+        throwOnSupabaseError(error);
+      }));
+    }
 
-  const { data, error } = await supabase.schema('core').from('upload_batch').update({
+    const mappingRows = Object.entries(mapping).map(([standardField, sourceHeader]) => ({
+      import_type: batch.import_type, source_header: sourceHeader, standard_field: standardField,
+      raw_column: schema.fields.find((field) => field.standardField === standardField)?.rawColumn ?? standardField,
+      created_by: user.id, updated_at: new Date().toISOString(),
+    }));
+    if (mappingRows.length > 0) await upsertInChunks(supabase.schema('core').from('column_mapping'), mappingRows, 'import_type,source_header');
+    const { data, error } = await supabase.schema('core').from('upload_batch').update({
     success_rows: counts.successRows,
     warning_rows: counts.warningRows,
     error_rows: counts.errorRows,
     status: 'VALIDATED',
   }).eq('batch_id', batchId).select(importBatchColumns).single();
-  throwOnSupabaseError(error);
-  return data as ImportBatchSummary;
+    throwOnSupabaseError(error);
+    return data as ImportBatchSummary;
+  } catch (error) {
+    await markBatchFailed(supabase, batchId, error);
+    throw error;
+  }
 }
 
 export async function approveImport(batchId: string, replaceConfirmation?: string): Promise<ImportBatchSummary> {
@@ -183,7 +183,7 @@ export async function approveImport(batchId: string, replaceConfirmation?: strin
 
   const { data, error } = await supabase.schema('core').rpc('import_approved_batch', {
     p_batch_id: batchId,
-    replace_confirmation: replaceConfirmation ?? null,
+    p_replace_confirmation: replaceConfirmation ?? null,
   });
   throwOnSupabaseError(error);
   return data as ImportBatchSummary;
@@ -241,7 +241,7 @@ function readImportMode(value: FormDataEntryValue | null): ImportMode {
   throw new Error('IMPORT_MODE_INVALID');
 }
 
-function readMapping(value: unknown, importType: ImportType, rows: readonly ParsedImportRow[]): ColumnMapping {
+function readConfirmedMapping(value: unknown): ColumnMapping {
   if (typeof value === 'string' && value.trim()) {
     try {
       const parsed = JSON.parse(value);
@@ -251,18 +251,17 @@ function readMapping(value: unknown, importType: ImportType, rows: readonly Pars
     }
     throw new Error('COLUMN_MAPPING_INVALID');
   }
-  return suggestColumnMapping(importType, Array.from(new Set(rows.flatMap((row) => Object.keys(row.values)))));
+  throw new Error('COLUMN_MAPPING_CONFIRMATION_REQUIRED');
 }
 
-function buildStagingRow(batchId: string, schema: ImportSchema, mapping: ColumnMapping, row: ParsedImportRow) {
-  const normalizedData = normalizeRow(schema, mapping, row);
+function buildPreviewStagingRow(batchId: string, row: ParsedImportRow) {
   return {
     batch_id: batchId,
     row_number: row.rowNumber,
     original_data: row.values,
-    normalized_data: normalizedData,
-    source_record_id: buildSourceRecordId(schema.type, schema.naturalKey.map((field) => mappedValue(row, mapping, field))),
-    mapping_confirmed: true,
+    normalized_data: null,
+    source_record_id: null,
+    mapping_confirmed: false,
   };
 }
 
@@ -293,23 +292,20 @@ function toParsedRow(row: StagingRow): ParsedImportRow {
   };
 }
 
-async function loadKnownMasterIds(supabase: any, schema: ImportSchema): Promise<{ knownItemIds: Set<string>; knownSupplierIds: Set<string> }> {
-  const knownItemIds = new Set<string>();
-  const knownSupplierIds = new Set<string>();
-  if (schema.itemReferenceFields.length > 0) {
-    const { data, error } = await supabase.schema('raw').from('item_master').select('품목코드');
-    throwOnSupabaseError(error);
-    for (const row of data ?? []) if (row.품목코드 != null) knownItemIds.add(String(row.품목코드));
-  }
-  if (schema.supplierReferenceFields.length > 0) {
-    const { data, error } = await supabase.schema('raw').from('supplier_master').select('공급업체코드,공급업체명');
-    throwOnSupabaseError(error);
-    for (const row of data ?? []) {
-      if (row.공급업체코드 != null) knownSupplierIds.add(String(row.공급업체코드));
-      if (row.공급업체명 != null) knownSupplierIds.add(String(row.공급업체명));
-    }
-  }
-  return { knownItemIds, knownSupplierIds };
+async function loadImportReferences(supabase: any, schema: ImportSchema): Promise<{ knownItemIds: Set<string>; knownSupplierIds: Set<string>; reasonCode: string | null }> {
+  const { data, error } = await supabase.schema('core').rpc('get_import_reference_data', { p_import_type: schema.type });
+  throwOnSupabaseError(error);
+  const payload = isUnknownRecord(data) ? data : {};
+  return {
+    knownItemIds: new Set(readStringList(payload.known_item_ids)),
+    knownSupplierIds: new Set(readStringList(payload.known_supplier_ids)),
+    reasonCode: payload.target_available === true ? null : typeof payload.reason_code === 'string' ? payload.reason_code : 'IMPORT_TARGET_UNAVAILABLE',
+  };
+}
+
+function unavailableTargetIssues(rows: readonly ParsedImportRow[], reasonCode: string): ValidationIssue[] {
+  return rows.map((row) => ({ rowNumber: row.rowNumber, fieldName: 'import_type', errorCode: reasonCode,
+    errorMessage: '현재 RAW 대상 또는 참조 마스터를 사용할 수 없어 적재할 수 없습니다.', severity: 'ERROR' as const, originalValue: null }));
 }
 
 function findNaturalKeyIssues(schema: ImportSchema, mapping: ColumnMapping, rows: readonly ParsedImportRow[]): ValidationIssue[] {
@@ -359,7 +355,41 @@ function stringifyCsvValue(value: unknown): string {
 }
 
 function escapeCsvValue(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+  const safeValue = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(safeValue) ? `"${safeValue.replaceAll('"', '""')}"` : safeValue;
+}
+
+function chunks<T>(values: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
+  return result;
+}
+
+async function insertInChunks(query: any, rows: readonly Record<string, unknown>[]): Promise<void> {
+  for (const group of chunks(rows, 500)) {
+    const { error } = await query.insert(group);
+    throwOnSupabaseError(error);
+  }
+}
+
+async function upsertInChunks(query: any, rows: readonly Record<string, unknown>[], onConflict: string): Promise<void> {
+  for (const group of chunks(rows, 500)) {
+    const { error } = await query.upsert(group, { onConflict });
+    throwOnSupabaseError(error);
+  }
+}
+
+async function markBatchFailed(supabase: any, batchId: string, failure: unknown): Promise<void> {
+  const message = failure instanceof Error ? failure.message : 'IMPORT_PIPELINE_FAILED';
+  await supabase.schema('core').from('upload_batch').update({ status: 'FAILED', failure_code: 'IMPORT_PIPELINE_FAILED', failure_message: message }).eq('batch_id', batchId);
+}
+
+function readStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

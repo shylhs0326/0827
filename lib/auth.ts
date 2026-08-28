@@ -18,7 +18,8 @@ export async function requireUser() {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect('/login');
   const { data: profile, error } = await supabase.schema('core').from('app_user').select('*').eq('user_id', user.id).maybeSingle();
-  if (error || !profile || !profile.active) redirect('/login?error=inactive');
+  if (error) redirect('/login?error=profile-unavailable');
+  if (!profile || !profile.active) redirect('/login?error=inactive');
   return { supabase, user, profile: profile as AppUser };
 }
 

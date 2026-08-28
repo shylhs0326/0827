@@ -7,3 +7,7 @@ export function canChangeRole({ actorId, targetId, nextRole }: { actorId: string
 export function canChangeActive({ actorId, targetId, nextActive }: { actorId: string; targetId: string; nextActive: boolean }) {
   return actorId !== targetId || nextActive;
 }
+
+export function getDefaultRouteForRole(role: AppRole) {
+  return role === 'ADMIN' ? '/admin' : '/workflow';
+}

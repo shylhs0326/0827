@@ -77,3 +77,77 @@ Supabase SQL Editor에서 migration 파일 내용을 모두 선택한 뒤 한 �
 ```sql
 select to_regclass('core.app_user'), to_regclass('analytics');
 ```
+
+## 2026-08-28 `이메일 또는 비밀번호를 확인하세요`
+
+### 조사 결과
+
+현재 로그인 폼은 Supabase의 모든 `signInWithPassword` 오류를 같은 문구로 표시한다. 따라서 이 문구만으로는 잘못된 비밀번호, Auth 사용자 미생성, 이메일 미확인, Email provider 설정 오류를 구분할 수 없다.
+
+### 확인 순서
+
+1. `.env.local`이 연결하는 Supabase 프로젝트와 현재 Dashboard 프로젝트가 같은지 확인한다.
+2. Authentication → Providers → Email이 활성화되어 있는지 확인한다.
+3. Authentication → Users에서 해당 이메일 사용자가 존재하고 Confirmed 상태인지 확인한다.
+4. Dashboard에서 비밀번호를 재설정하거나 사용자를 새로 생성해 재시도한다.
+5. 로그인 성공 후에도 `core.app_user` 행과 `active = true`가 필요하다.
+
+## 2026-08-28 `invalid_credentials`
+
+### 원인
+
+Supabase Auth의 `signInWithPassword` 단계에서 이메일 또는 비밀번호 조합이 거부되었다. 이 단계에서는 `core.app_user`, RLS, middleware가 아직 실행되지 않는다.
+
+### 해결 방법
+
+Authentication → Users에서 같은 Supabase 프로젝트의 사용자가 존재하는지 확인하고, 존재하면 Dashboard에서 비밀번호를 재설정한다. 사용자가 없으면 Dashboard에서 Email 사용자로 새로 생성한다. Auth 로그인 성공 후에만 `core.app_user` backfill과 role 지정으로 진행한다.
+
+## 2026-08-28 `No apikey request header or url param was found`
+
+### 원인
+
+Supabase 요청에 `apikey`가 전달되지 않은 환경 설정 또는 배포 bundle을 사용하고 있다. 비밀번호 오류가 아니며, `.env.local`은 Git push에 포함되지 않기 때문에 Vercel/다른 실행 환경에는 자동 전달되지 않는다.
+
+### 해결 방법
+
+`NEXT_PUBLIC_SUPABASE_URL`과 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`를 실행 환경에 설정하고 개발 서버를 재시작하거나 배포를 다시 생성한다. 브라우저 Network의 `auth/v1/token` 또는 `rest/v1/rpc/record_login` 요청 Headers에 `apikey`가 있는지 확인한다.
+
+## 2026-08-28 `rest/v1/rpc/record_login` HTTP 406
+
+### 원인
+
+`core`는 사용자 정의 스키마다. Supabase Data API의 Exposed schemas에 포함되지 않은 상태에서 `client.schema('core')`로 RPC 또는 테이블을 호출하면 PostgREST가 `PGRST106`과 HTTP 406을 반환한다. 기존 로그인 코드는 이 API 오류를 프로필의 `active = false`와 동일하게 취급해 잘못된 비활성 계정 안내를 표시했다.
+
+### 해결 방법
+
+1. Supabase Dashboard → Project Settings → Data API(또는 API) → Exposed schemas에 `core`와 `analytics`를 추가하고 저장한다.
+2. SQL Editor에서 기존 Auth 사용자의 프로필 행을 backfill한다.
+
+```sql
+insert into core.app_user (user_id, email, name)
+select id, coalesce(email, ''), coalesce(raw_user_meta_data ->> 'name', '')
+from auth.users
+on conflict (user_id) do nothing;
+
+select user_id, email, role, active from core.app_user;
+```
+
+3. 로그인할 사용자의 `active`가 `true`인지 확인한다. 첫 관리자라면 해당 사용자만 `ADMIN`으로 변경한다.
+
+```sql
+update core.app_user
+set role = 'ADMIN', active = true
+where email = '관리자이메일@example.com';
+```
+
+## 2026-08-28 로그인 화면이 표시되지 않음
+
+### 확인 결과
+
+로그인 라우트는 `app/(auth)/login/page.tsx`에 존재한다. 현재 작업 환경에는 실행 중인 Next.js 서버(3000~3002 포트)가 없으므로, 로컬 브라우저에서 로그인 화면을 보려면 개발 서버를 먼저 실행해야 한다. 배포 화면을 보는 경우에는 로컬의 미커밋 변경이 반영되지 않는다.
+
+### 확인 방법
+
+1. 로컬에서는 프로젝트 폴더에서 `npm run dev`를 실행한 뒤 `http://localhost:3000/login`으로 직접 접속한다.
+2. 배포 환경에서는 `NEXT_PUBLIC_SUPABASE_URL`과 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`를 배포 환경변수에 설정한 뒤 재배포한다.
+3. 계속 표시되지 않으면 주소창의 전체 URL과 브라우저 오류 화면을 확인한다.

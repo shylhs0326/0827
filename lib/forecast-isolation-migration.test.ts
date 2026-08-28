@@ -127,10 +127,40 @@ test('upsert는 기존 FILE_UPLOAD 행을 snapshot하고 append/upsert rollback�
 
   assert.match(migration, /import_mode\s*=\s*'upsert'/i);
   assert.match(migration, /insert into core\.import_rollback_snapshot/i);
-  assert.match(migration, /source_type\s*=\s*'FILE_UPLOAD'/i);
+  assert.match(migration, /'source_type',\s*'FILE_UPLOAD'/i);
   assert.match(migration, /create or replace function core\.rollback_import_batch\s*\(/i);
   assert.match(migration, /where batch_id\s*=\s*\$1/i);
-  assert.match(migration, /jsonb_populate_record/i);
+  assert.match(migration, /unique\s*\(batch_id,\s*raw_table,\s*source_record_id\)/i);
+  assert.match(migration, /SOURCE_RECORD_ID_REQUIRED/i);
+  assert.doesNotMatch(migration, /coalesce\(staging\.source_record_id,\s*staging\.row_number::text\)/i);
+});
+
+test('Import migration은 누락 RAW table을 migration 시점에 실패시키지 않고 실행 시점에 명시적으로 거부한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.doesNotMatch(migration, /IMPORT_RAW_TABLE_REQUIRED/i);
+  assert.match(migration, /IMPORT_TARGET_UNAVAILABLE/i);
+  assert.match(migration, /to_regclass\(format\('raw\.%I', target_table\)\) is null/i);
+});
+
+test('Import RPC는 writable payload column만 명시 삽입하고 generated 또는 identity-always column을 거부한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.doesNotMatch(migration, /jsonb_populate_record\(null::raw\.%1\$I, \$1\)\)\.\*/i);
+  assert.match(migration, /is_generated\s*=\s*'ALWAYS'/i);
+  assert.match(migration, /identity_generation\s*=\s*'ALWAYS'/i);
+  assert.match(migration, /IMPORT_RAW_PAYLOAD_COLUMN_UNSUPPORTED/i);
+  assert.match(migration, /insert into raw\.%I \(%s\) select %s/i);
+  assert.match(migration, /set search_path = pg_catalog, core, raw/i);
+  assert.doesNotMatch(migration, /set search_path = core, raw, public/i);
+});
+
+test('Import core table re-run은 essential columns를 ALTER ADD COLUMN IF NOT EXISTS로 보완한다', () => {
+  const migration = readFileSync(importPipelineMigrationPath, 'utf8');
+
+  assert.match(migration, /alter table core\.upload_batch add column if not exists failure_code text/i);
+  assert.match(migration, /alter table core\.import_staging add column if not exists source_record_id text/i);
+  assert.match(migration, /create unique index if not exists import_staging_batch_source_record_id_unique/i);
 });
 
 test('replace는 명시 확인을 요구하고 rollback을 거부한다', () => {

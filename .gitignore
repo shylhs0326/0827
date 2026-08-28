@@ -27,3 +27,6 @@ next-env.d.ts
 
 # vercel
 .vercel
+
+# isolated Codex worktrees
+.worktrees/

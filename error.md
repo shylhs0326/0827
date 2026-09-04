@@ -203,3 +203,29 @@ where setting_key = true;
 ### 기존 public migration의 `planning_run_id` 오류
 
 `20260813000100_create_procurement_demand_core.sql`은 기존 public 테이블의 컬럼을 보완하지 않는다. 따라서 기존 `historical_actuals`에 `planning_run_id`가 없으면 인덱스 생성에서 실패할 수 있다. 이 오류는 STEP 3과 무관하므로 해당 base migration을 재실행하지 말고, 먼저 테이블 구조와 행 수를 확인한 뒤 데이터 보존 방식으로 별도 보완한다.
+
+## 2026-09-04 PowerShell에서 npm 실행 차단
+
+### 증상
+
+PowerShell에서 `npm test` 실행 시 `npm.ps1`을 로드할 수 없다는 `PSSecurityException`이 발생한다.
+
+### 원인
+
+PowerShell 실행 정책이 `.ps1` 스크립트 실행을 차단하고 있다. Node.js나 프로젝트 코드의 오류가 아니다.
+
+### 해결 방법
+
+권한이나 실행 정책을 변경하지 않고 Windows 명령 실행 파일을 직접 호출한다.
+
+```powershell
+npm.cmd test
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+정책을 변경할 수 있는 개인 PC에서만 PowerShell 사용자 범위에 허용할 수도 있다.
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```

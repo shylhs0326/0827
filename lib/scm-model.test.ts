@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeLeadtimeGap } from './scm-model.ts';
+import { normalizeLeadtimeGap, normalizeShipmentTrend } from './scm-model.ts';
 
 test('normalizes analytics leadtime rows into the screen model', () => {
   const result = normalizeLeadtimeGap({
@@ -21,6 +21,21 @@ test('normalizes analytics leadtime rows into the screen model', () => {
     actualAverage: 37.6,
     p80: 44,
     gap: 12,
+  });
+});
+
+test('normalizes the shipment trend sample used by the live query', () => {
+  assert.deepEqual(normalizeShipmentTrend({
+    item_code: '602K02693',
+    n_months: 40,
+    avg_3m: 779.0,
+    avg_12m: 772.3,
+  }), {
+    itemCode: '602K02693',
+    months: 40,
+    average3Months: 779.0,
+    average6Months: null,
+    average12Months: 772.3,
   });
 });
 

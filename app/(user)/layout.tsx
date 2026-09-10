@@ -3,7 +3,9 @@ import Sidebar from '@/components/shell/sidebar';
 import Topbar from '@/components/shell/topbar';
 import { requireUser } from '@/lib/auth';
 
+export const dynamic = 'force-dynamic';
+
 export default async function UserLayout({ children }: { children: ReactNode }) {
-  await requireUser();
-  return <div className="app-shell"><Sidebar /><main className="main"><Topbar />{children}</main></div>;
+  const { profile } = await requireUser();
+  return <div className="app-shell"><Sidebar role={profile.role} /><main className="main"><Topbar name={profile.name || profile.email} role={profile.role} />{children}</main></div>;
 }

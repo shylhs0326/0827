@@ -31,3 +31,14 @@ export async function requireAdmin() {
   }
   return result;
 }
+
+export type AuthenticatedUser = {
+  authUser: { id: string; email?: string };
+  profile: AppUser;
+};
+
+/** API Route에서 redirect 대신 상태 코드로 인증 실패를 처리할 때 사용합니다. */
+export async function requireSignedIn(): Promise<AuthenticatedUser> {
+  const result = await requireUser();
+  return { authUser: { id: result.user.id, email: result.user.email ?? undefined }, profile: result.profile };
+}

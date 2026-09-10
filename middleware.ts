@@ -1,15 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
-import { isPublicAuthRoute } from '@/lib/auth-route';
+import { getSupabaseEnv } from '@/lib/supabase/env';
+import { routeAccessDecision } from '@/lib/auth-policy';
 
 export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({ request });
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const protectedPrefixes = ['/dashboard', '/analysis', '/agent', '/admin', '/workflow'];
   const pathname = request.nextUrl.pathname;
-  if (!url || !key) return response;
+  if (!protectedPrefixes.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) return NextResponse.next();
+  let response = NextResponse.next({ request });
+  const env = getSupabaseEnv();
+  if (!env) return new NextResponse('Supabase 환경변수가 필요합니다.', { status: 503 });
 
-  const supabase = createServerClient(url, key, {
+  const supabase = createServerClient(env.url, env.publishableKey, {
     cookies: {
       getAll: () => request.cookies.getAll(),
       setAll(values: Array<{ name: string; value: string; options?: Parameters<typeof response.cookies.set>[2] }>) {
@@ -21,11 +23,14 @@ export async function middleware(request: NextRequest) {
   });
 
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user && !isPublicAuthRoute(pathname)) {
+  if (!user) {
     const login = new URL('/login', request.url);
     login.searchParams.set('next', `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(login);
   }
+  const { data: profile } = await supabase.schema('core').from('app_user').select('role, active').eq('user_id', user.id).maybeSingle();
+  const access = routeAccessDecision({ pathname, authenticated: true, active: profile?.active === true, role: profile?.role === 'ADMIN' ? 'ADMIN' : profile?.role === 'USER' ? 'USER' : null });
+  if (access.kind === 'FORBIDDEN') return new NextResponse('이 경로에 접근할 권한이 없습니다.', { status: 403 });
   return response;
 }
 
